@@ -1,0 +1,81 @@
+name: Monorepo Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'services/example-auth/**'
+      - 'services/example-backend/**'
+      - 'services/example-frontend/**'
+      - 'services/example-api/**'
+
+permissions:
+  contents: read
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      auth: ${{ steps.filter.outputs.auth }}
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      api: ${{ steps.filter.outputs.api }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - id: filter
+        uses: dorny/paths-filter@v4
+        with:
+          filters: |
+            auth:
+              - 'services/example-auth/**'
+            backend:
+              - 'services/example-backend/**'
+            frontend:
+              - 'services/example-frontend/**'
+            api:
+              - 'services/example-api/**'
+
+  deploy-auth:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.auth == 'true'
+    permissions:
+      id-token: write
+      contents: read
+    uses: ./.github/workflows/Monorepo-CICD-ECS-Deployment.yaml
+    with:
+      service_name: example-auth
+      path: services/example-auth
+
+  deploy-backend:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.backend == 'true'
+    permissions:
+      id-token: write
+      contents: read
+    uses: ./.github/workflows/Monorepo-CICD-ECS-Deployment.yaml
+    with:
+      service_name: example-backend
+      path: services/example-backend
+
+  deploy-frontend:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.frontend == 'true'
+    permissions:
+      id-token: write
+      contents: read
+    uses: ./.github/workflows/Monorepo-CICD-ECS-Deployment.yaml
+    with:
+      service_name: example-frontend
+      path: services/example-frontend
+
+  deploy-api:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.api == 'true'
+    permissions:
+      id-token: write
+      contents: read
+    uses: ./.github/workflows/Monorepo-CICD-ECS-Deployment.yaml
+    with:
+      service_name: example-api
+      path: services/example-api

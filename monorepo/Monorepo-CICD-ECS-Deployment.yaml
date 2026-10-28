@@ -1,0 +1,93 @@
+name: Monorepo Reusable ECS Deployment
+
+on:
+  workflow_call:
+    inputs:
+      service_name:
+        required: true
+        type: string
+      path:
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    concurrency:
+      group: deploy-${{ github.repository }}-production-${{ inputs.service_name }}
+      cancel-in-progress: false
+    env:
+      ECR_REPOSITORY: example/monorepo/${{ inputs.service_name }}
+      ECS_CLUSTER_NAME: Monorepo-Example-Cluster
+      SERVICE_MAP: |
+        {
+          "example-api":      {"TASK_DEFINITION_FAMILY": "Monorepo-Example-API-Task-Definition",      "ECS_SERVICE_NAME": "Example-API-Service",      "CONTAINER_NAME": "monorepo-example-api"},
+          "example-auth":     {"TASK_DEFINITION_FAMILY": "Monorepo-Example-Auth-Task-Definition",     "ECS_SERVICE_NAME": "Example-Auth-Service",     "CONTAINER_NAME": "monorepo-example-auth"},
+          "example-frontend": {"TASK_DEFINITION_FAMILY": "Monorepo-Example-Frontend-Task-Definition", "ECS_SERVICE_NAME": "Example-Frontend-Service", "CONTAINER_NAME": "monorepo-example-frontend"},
+          "example-backend":  {"TASK_DEFINITION_FAMILY": "Monorepo-Example-Backend-Task-Definition",  "ECS_SERVICE_NAME": "Example-Backend-Service",  "CONTAINER_NAME": "monorepo-example-backend"}
+        }
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Resolve ECS names for ${{ inputs.service_name }}
+        env:
+          SERVICE_NAME: ${{ inputs.service_name }}
+        run: |
+          jq -r --arg s "$SERVICE_NAME" \
+            '.[$s] // error("no ECS mapping for service " + $s) | to_entries[] | "\(.key)=\(.value)"' \
+            <<< "$SERVICE_MAP" >> "$GITHUB_ENV"
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set Image URI
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          echo "IMAGE_URI=${ECR_REGISTRY}/${ECR_REPOSITORY}:${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_ENV"
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ${{ inputs.path }}/Dockerfile
+          push: true
+          tags: ${{ env.IMAGE_URI }}
+
+      - name: Download Task Definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition "$TASK_DEFINITION_FAMILY" \
+            --query "taskDefinition" \
+            --output json > task-def.json
+
+      - name: Render New Task Definition
+        id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-def.json
+          container-name: ${{ env.CONTAINER_NAME }}
+          image: ${{ env.IMAGE_URI }}
+
+      - name: Deploy to ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render.outputs.task-definition }}
+          service: ${{ env.ECS_SERVICE_NAME }}
+          cluster: ${{ env.ECS_CLUSTER_NAME }}
+          wait-for-service-stability: true

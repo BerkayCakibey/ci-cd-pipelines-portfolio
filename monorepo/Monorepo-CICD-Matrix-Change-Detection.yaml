@@ -1,0 +1,46 @@
+name: Monorepo Deploy (Matrix)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'services/**'
+
+permissions:
+  contents: read
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.filter.outputs.changes }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - id: filter
+        uses: dorny/paths-filter@v4
+        with:
+          filters: |
+            auth:
+              - 'services/example-auth/**'
+            backend:
+              - 'services/example-backend/**'
+            frontend:
+              - 'services/example-frontend/**'
+            api:
+              - 'services/example-api/**'
+
+  deploy-services:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.services != '[]'
+    permissions:
+      id-token: write
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJSON(needs.detect-changes.outputs.services) }}
+    uses: ./.github/workflows/Monorepo-CICD-ECS-Deployment.yaml
+    with:
+      service_name: example-${{ matrix.service }}
+      path: services/example-${{ matrix.service }}
